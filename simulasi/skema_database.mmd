@@ -1,0 +1,122 @@
+%% ========================================================
+%% Skema Database Multi-Service (Polyglot Persistence)
+%% Sistem: Reverse Proxy & Containerized Multi-Backend
+%% ========================================================
+
+erDiagram
+    %% --------------------------------------------------------
+    %% 1. DATABASE MYSQL (Service: app-laravel)
+    %% Fokus: Manajemen Pengguna, Autentikasi, dan Sesi
+    %% --------------------------------------------------------
+    MYSQL_USERS {
+        bigint id PK
+        string name "Nama lengkap pengguna"
+        string email UK "Alamat email unik"
+        timestamp email_verified_at "Waktu verifikasi email"
+        string password "Hash kata sandi bcrypt"
+        string role "Administrator atau Operator"
+        string remember_token "Token sesi login persisten"
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    MYSQL_USER_PROFILES {
+        bigint id PK
+        bigint user_id FK "Relasi ke tabel users"
+        string phone_number "Nomor telepon aktif"
+        string avatar_url "URL atau path berkas avatar"
+        text address "Alamat tempat tinggal"
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    MYSQL_ACTIVITY_LOGS {
+        bigint id PK
+        bigint user_id FK "Pelaku aktivitas"
+        string action_name "Nama tindakan yang dilakukan"
+        string ip_address "IP klien yang tercatat"
+        text user_agent "Informasi peramban klien"
+        timestamp created_at
+    }
+
+    MYSQL_SESSIONS {
+        string id PK "Identifikasi sesi unik"
+        bigint user_id FK "Pengguna yang memiliki sesi"
+        string ip_address "IP klien"
+        text user_agent "Informasi peramban"
+        longtext payload "Data sesi terenkripsi"
+        int last_activity "Timestamp aktivitas terakhir"
+    }
+
+    MYSQL_USERS ||--o| MYSQL_USER_PROFILES : "memiliki profil"
+    MYSQL_USERS ||--o{ MYSQL_ACTIVITY_LOGS : "mencatat aktivitas"
+    MYSQL_USERS ||--o{ MYSQL_SESSIONS : "memiliki sesi aktif"
+
+    %% --------------------------------------------------------
+    %% 2. DATABASE POSTGRESQL (Service: app-go)
+    %% Fokus: Transaksi Cepat, Katalog Produk, dan Metrik Kinerja
+    %% --------------------------------------------------------
+    PG_ITEMS {
+        serial id PK
+        varchar_255 title "Nama entitas produk / barang"
+        text description "Keterangan detail entitas"
+        timestamp created_at "Waktu penambahan data"
+    }
+
+    PG_TRANSACTIONS {
+        bigint id PK
+        string transaction_code UK "Kode unik transaksi"
+        decimal total_amount "Nilai total nominal"
+        string payment_status "Menunggu, Berhasil, Gagal"
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    PG_TRANSACTION_DETAILS {
+        bigint id PK
+        bigint transaction_id FK "Relasi ke transaksi utama"
+        int item_id FK "Relasi ke entitas item"
+        int quantity "Jumlah kuantitas barang"
+        decimal unit_price "Harga satuan saat transaksi"
+    }
+
+    PG_SYSTEM_METRICS {
+        bigint id PK
+        varchar_100 service_name "Nama backend penghasil log"
+        int response_time_ms "Waktu latensi pemrosesan"
+        int http_status "Kode status HTTP respons"
+        timestamp recorded_at "Waktu perekaman metrik"
+    }
+
+    PG_TRANSACTIONS ||--|{ PG_TRANSACTION_DETAILS : "memiliki rincian"
+    PG_ITEMS ||--o{ PG_TRANSACTION_DETAILS : "tercantum dalam"
+
+    %% --------------------------------------------------------
+    %% 3. DATABASE MONGODB (Service: app-node)
+    %% Fokus: Dokumen Fleksibel, Log Peristiwa, dan Notifikasi
+    %% --------------------------------------------------------
+    MONGO_ITEMS_COLLECTION {
+        objectId _id PK
+        string title "Judul atau nama item"
+        string description "Deskripsi dokumen"
+        array tags "Kategori atau label item"
+        date createdAt "Waktu pembuatan dokumen"
+    }
+
+    MONGO_ANALYTICS_EVENTS {
+        objectId _id PK
+        string event_type "Jenis interaksi atau event"
+        string client_ip "IP klien dari header proxy"
+        document request_headers "Header HTTP hasil forward proxy"
+        date timestamp "Waktu terjadinya event"
+    }
+
+    MONGO_NOTIFICATIONS {
+        objectId _id PK
+        string recipient_id "Tujuan penerima notifikasi"
+        string title "Judul pesan notifikasi"
+        string message "Isi pesan lengkap"
+        boolean is_read "Status keterbacaan pesan"
+        date sent_at "Waktu pengiriman notifikasi"
+    }
+

@@ -1,0 +1,22 @@
+# Ignore binary lokal hasil kompilasi host agar di-compile ulang di dalam builder
+server
+
+# Ignore file environment dan kredensial sensitif
+.env
+.env.*
+!.env.example
+
+# Ignore log lokal
+logs/
+
+# Ignore file git dan editor
+.git/
+.github/
+.vscode/
+.idea/
+
+# Ignore file Docker dan dokumentasi
+Dockerfile
+.dockerignore
+README.md
+

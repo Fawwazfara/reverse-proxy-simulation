@@ -1,0 +1,23 @@
+# Ignore dependensi lokal agar di-install ulang di dalam container
+node_modules/
+
+# Ignore file environment dan kredensial sensitif
+.env
+.env.*
+!.env.example
+
+# Ignore log lokal
+logs/
+npm-debug.log*
+
+# Ignore file git dan editor
+.git/
+.github/
+.vscode/
+.idea/
+
+# Ignore file Docker dan dokumentasi
+Dockerfile
+.dockerignore
+README.md
+

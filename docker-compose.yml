@@ -1,0 +1,52 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx-proxy
+    restart: "no"
+    ports:
+      - "8084:80"                  # satu-satunya port yang terbuka ke host
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app-laravel
+      - app-node
+      - app-go
+    networks:            # Nginx ikut 3 network, supaya bisa menjangkau ketiga app
+      - laravel-proxy
+      - node-proxy
+      - go-proxy
+    mem_limit: 64m
+
+  app-laravel:
+    build: ./app-laravel
+    container_name: app-laravel
+    restart: "no"
+    environment:
+      APP_KEY: ${APP_KEY}
+      APP_ENV: production
+      APP_DEBUG: "false"
+    networks:
+      - laravel-proxy
+    mem_limit: 256m
+
+  app-node:
+    build: ./app-node
+    container_name: app-node
+    restart: "no"
+    init: true                   # proses init kecil supaya SIGTERM tertangani
+    networks:
+      - node-proxy
+    mem_limit: 128m
+
+  app-go:
+    build: ./app-go
+    container_name: app-go
+    restart: "no"
+    networks:
+      - go-proxy
+    mem_limit: 64m
+
+networks:
+  laravel-proxy:
+  node-proxy:
+  go-proxy:

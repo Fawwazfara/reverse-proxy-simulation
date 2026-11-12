@@ -1,0 +1,42 @@
+%% ========================================================
+%% Arsitektur Sistem Nginx Reverse Proxy & Multi-Backend
+%% Lingkungan: Docker Containerization & Virtual Networking
+%% ========================================================
+
+graph TD
+    Client["Klien / Peramban Web"]
+
+    subgraph Host_Gateway ["Gerbang Utama Host"]
+        Port8080["Port Masuk Host : 8080"]
+    end
+
+    subgraph Docker_Platform ["Platform Docker"]
+        NginxProxy["Nginx Reverse Proxy Container<br/>(Port Internal : 80)<br/>Pemeriksa Hostname & Header Forwarding"]
+
+        subgraph Network_Laravel ["Jaringan Terisolasi: laravel-proxy"]
+            AppLaravel["Container: app-laravel<br/>(PHP 8.4 + Laravel)<br/>Port : 8001"]
+            DBMySQL[("Database: MySQL 8.0<br/>Port : 3306")]
+        end
+
+        subgraph Network_Node ["Jaringan Terisolasi: node-proxy"]
+            AppNode["Container: app-node<br/>(Node.js 20 + Express)<br/>Port : 8002"]
+            DBMongo[("Database: MongoDB 7.0<br/>Port : 27017")]
+        end
+
+        subgraph Network_Go ["Jaringan Terisolasi: go-proxy"]
+            AppGo["Container: app-go<br/>(Golang 1.22 Runtime)<br/>Port : 8003"]
+            DBPostgres[("Database: PostgreSQL 16<br/>Port : 5432")]
+        end
+    end
+
+    Client -->|HTTP Request| Port8080
+    Port8080 --> NginxProxy
+
+    NginxProxy -->|"Host: laravel.wac.web.id"| AppLaravel
+    NginxProxy -->|"Host: node.wac.web.id"| AppNode
+    NginxProxy -->|"Host: go.wac.web.id"| AppGo
+
+    AppLaravel --- DBMySQL
+    AppNode --- DBMongo
+    AppGo --- DBPostgres
+

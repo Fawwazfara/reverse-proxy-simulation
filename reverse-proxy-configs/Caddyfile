@@ -1,0 +1,16 @@
+# ========================================================
+# Contoh Konfigurasi Reverse Proxy Caddy
+# ========================================================
+
+laravel.test {
+    reverse_proxy 127.0.0.1:8001
+}
+
+node.test {
+    reverse_proxy 127.0.0.1:8002
+}
+
+go.test {
+    reverse_proxy 127.0.0.1:8003
+}
+
