@@ -2,11 +2,14 @@ services:
   nginx:
     image: nginx:1.27-alpine
     container_name: nginx-proxy
-    restart: "no"
+    restart: unless-stopped
     ports:
-      - "8084:80"                  # satu-satunya port yang terbuka ke host
+      - "80:80"                  # satu-satunya port yang terbuka ke host
+      - "443:443"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
     depends_on:
       - app-laravel
       - app-node
@@ -17,10 +20,16 @@ services:
       - go-proxy
     mem_limit: 64m
 
+  certbot:
+    image: certbot/certbot
+    profiles: ["tools"]          # tidak ikut jalan saat 'up', hanya dipanggil manual
+    volumes:
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
   app-laravel:
     build: ./app-laravel
     container_name: app-laravel
-    restart: "no"
+    restart: unless-stopped
     environment:
       APP_KEY: ${APP_KEY}
       APP_ENV: production
@@ -32,7 +41,7 @@ services:
   app-node:
     build: ./app-node
     container_name: app-node
-    restart: "no"
+    restart: unless-stopped
     init: true                   # proses init kecil supaya SIGTERM tertangani
     networks:
       - node-proxy
@@ -41,7 +50,7 @@ services:
   app-go:
     build: ./app-go
     container_name: app-go
-    restart: "no"
+    restart: unless-stopped
     networks:
       - go-proxy
     mem_limit: 64m
