@@ -3,10 +3,16 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const mongoose = require('mongoose');
+const { createClient } = require('redis');
 
 const app = express();
 const PORT = process.env.PORT || 8002;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/nodedb';
+const REDIS_URL = process.env.REDIS_URL || '';
+
+const ITEMS_CACHE_KEY = 'items:all';
+const ITEMS_CACHE_TTL_SEC = 30;
+const REDIS_TIMEOUT_MS = 1000;
 
 // Penting untuk reverse proxy: membaca header X-Forwarded-*
 app.set('trust proxy', true);
@@ -52,6 +58,101 @@ mongoose
     dbStatus.message = `Gagal terhubung ke MongoDB: ${err.message}`;
     console.warn('[MongoDB] Connection failed (running in offline fallback mode):', err.message);
   });
+
+// State & Koneksi Redis (non-blocking, timeout singkat, aman jika Redis mati)
+let redisClient = null;
+const redisStatus = {
+  connected: false,
+  message: REDIS_URL ? 'Mencoba menghubungkan ke Redis...' : 'REDIS_URL tidak diset (cache nonaktif)',
+};
+
+if (REDIS_URL) {
+  try {
+    redisClient = createClient({
+      url: REDIS_URL,
+      // Jangan antrekan command saat koneksi terputus agar request HTTP tidak hang
+      disableOfflineQueue: true,
+      socket: {
+        connectTimeout: 2000,
+        reconnectStrategy: (retries) => Math.min(retries * 1000, 10000),
+      },
+    });
+
+    redisClient.on('ready', () => {
+      redisStatus.connected = true;
+      redisStatus.message = 'Terhubung ke Redis';
+      console.log('[Redis] Connected successfully');
+    });
+
+    redisClient.on('end', () => {
+      redisStatus.connected = false;
+      redisStatus.message = 'Koneksi Redis ditutup';
+    });
+
+    redisClient.on('error', (err) => {
+      if (redisStatus.connected || redisStatus.message === 'Mencoba menghubungkan ke Redis...') {
+        console.warn('[Redis] Connection error (running without cache):', err.message);
+      }
+      redisStatus.connected = false;
+      redisStatus.message = `Gagal terhubung ke Redis: ${err.message}`;
+    });
+
+    // Koneksi di background agar tidak memblokir startup Express
+    redisClient.connect().catch((err) => {
+      redisStatus.connected = false;
+      redisStatus.message = `Gagal terhubung ke Redis: ${err.message}`;
+    });
+  } catch (err) {
+    redisClient = null;
+    redisStatus.connected = false;
+    redisStatus.message = `Konfigurasi REDIS_URL tidak valid: ${err.message}`;
+    console.warn('[Redis] Invalid URL (cache disabled):', err.message);
+  }
+} else {
+  console.log('[Redis] REDIS_URL tidak diset, berjalan tanpa cache Redis');
+}
+
+// Helper timeout singkat agar operasi Redis yang macet tidak memperlambat response API
+function withRedisTimeout(promise, ms = REDIS_TIMEOUT_MS) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Redis command timeout')), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function getCachedItems() {
+  if (!redisClient?.isReady) return null;
+  try {
+    const raw = await withRedisTimeout(redisClient.get(ITEMS_CACHE_KEY));
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    console.warn('[Redis] Gagal membaca cache:', err.message);
+    return null;
+  }
+}
+
+async function setCachedItems(payload) {
+  if (!redisClient?.isReady) return;
+  try {
+    await withRedisTimeout(
+      redisClient.set(ITEMS_CACHE_KEY, JSON.stringify(payload), { EX: ITEMS_CACHE_TTL_SEC })
+    );
+  } catch (err) {
+    console.warn('[Redis] Gagal menyimpan cache:', err.message);
+  }
+}
+
+async function invalidateItemsCache() {
+  if (!redisClient?.isReady) return;
+  try {
+    await withRedisTimeout(redisClient.del(ITEMS_CACHE_KEY));
+  } catch (err) {
+    console.warn('[Redis] Gagal menghapus cache:', err.message);
+  }
+}
 
 // Endpoint Halaman Utama (HTML Dashboard)
 app.get('/', (req, res) => {
@@ -259,6 +360,9 @@ app.get('/api/health', (req, res) => {
       connected: dbStatus.connected,
       uri: dbStatus.uri,
     },
+    redis: {
+      connected: redisStatus.connected,
+    },
     proxy_headers: {
       x_real_ip: req.headers['x-real-ip'] || null,
       x_forwarded_for: req.headers['x-forwarded-for'] || null,
@@ -268,17 +372,30 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Endpoint Data Items (CRUD Sample)
+// Endpoint Data Items (dengan Redis cache TTL 30 detik)
 app.get('/api/items', async (req, res) => {
+  // Cek cache Redis terlebih dahulu
+  const cached = await getCachedItems();
+  if (cached) {
+    return res.json({ source: cached.source, cache: 'hit', data: cached.data });
+  }
+
+  // Jika cache miss, ambil dari MongoDB atau fallback memory
+  let payload;
   if (dbStatus.connected) {
     try {
       const items = await Item.find().sort({ createdAt: -1 });
-      return res.json({ source: 'mongodb', data: items });
+      payload = { source: 'mongodb', data: items };
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
+  } else {
+    payload = { source: 'memory_fallback', data: memoryItems };
   }
-  return res.json({ source: 'memory_fallback', data: memoryItems });
+
+  // Simpan hasil ke cache (TTL 30 detik) dan kembalikan dengan status cache: "miss"
+  await setCachedItems(payload);
+  return res.json({ source: payload.source, cache: 'miss', data: payload.data });
 });
 
 app.post('/api/items', async (req, res) => {
@@ -290,6 +407,8 @@ app.post('/api/items', async (req, res) => {
   if (dbStatus.connected) {
     try {
       const newItem = await Item.create({ title, description });
+      // Hapus cache lama agar data baru langsung terbaca pada GET berikutnya
+      await invalidateItemsCache();
       return res.status(201).json({ source: 'mongodb', data: newItem });
     } catch (e) {
       return res.status(500).json({ error: e.message });
@@ -303,10 +422,54 @@ app.post('/api/items', async (req, res) => {
     createdAt: new Date().toISOString(),
   };
   memoryItems.push(newItem);
+  // Hapus cache lama agar item fallback memory terbaru ikut terbaca
+  await invalidateItemsCache();
   return res.status(201).json({ source: 'memory_fallback', data: newItem });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`[Node.js] Server running on http://0.0.0.0:${PORT}`);
 });
+
+// Handler SIGTERM / SIGINT untuk graceful shutdown saat container dihentikan
+let isShuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`\n[Shutdown] Menerima ${signal}, menutup server dan koneksi...`);
+
+  // Batas waktu paksa keluar jika ada koneksi yang macet
+  const forceTimer = setTimeout(() => {
+    console.error('[Shutdown] Timeout penutupan koneksi, keluar paksa.');
+    process.exit(1);
+  }, 5000);
+  forceTimer.unref();
+
+  try {
+    await new Promise((resolve) => server.close(resolve));
+    console.log('[Shutdown] HTTP server ditutup');
+
+    if (redisClient?.isReady) {
+      await redisClient.quit();
+      console.log('[Shutdown] Koneksi Redis ditutup');
+    } else if (redisClient?.isOpen) {
+      redisClient.destroy();
+      console.log('[Shutdown] Koneksi Redis dihentikan');
+    }
+
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.connection.close();
+      console.log('[Shutdown] Koneksi MongoDB ditutup');
+    }
+
+    clearTimeout(forceTimer);
+    process.exit(0);
+  } catch (err) {
+    console.error('[Shutdown] Gagal menutup koneksi dengan rapi:', err.message);
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
