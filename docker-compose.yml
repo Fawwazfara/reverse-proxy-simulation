@@ -202,14 +202,18 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
     restart: unless-stopped
+    privileged: true
     command:
       - --housekeeping_interval=30s
-      - --docker_only=true
+      # Gunakan socket containerd (namespace moby) agar kompatibel dengan Docker overlayfs snapshotter
+      - --containerd=/run/containerd/containerd.sock
+      - --containerd-namespace=moby
     volumes:
       - /:/rootfs:ro
-      - /var/run:/var/run:ro
       - /sys:/sys:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
       - /var/lib/docker/:/var/lib/docker:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
     networks:
       - monitoring
     mem_limit: 128m
